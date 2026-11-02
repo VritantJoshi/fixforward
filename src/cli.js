@@ -4,7 +4,7 @@ import readline from 'node:readline/promises';
 import { runCmd, parseJsonOutput } from './exec.js';
 import { extractFailures } from './parse.js';
 import { diagnose } from './rules.js';
-import { applyFix, findFiles } from './fixes.js';
+import { applyFix, findFiles, GENERATED_MARK } from './fixes.js';
 import { explainError, aiAvailable } from './llm.js';
 import { recordRun, readHistory, insights } from './history.js';
 
@@ -80,7 +80,7 @@ function validate(ctx) {
 function markInheritedDebt(dx, ctx) {
   const inChange = new Set(findFiles(ctx.root, (p) => /\.(cls|trigger)$/.test(p))
     .map((f) => path.basename(f).replace(/\.(cls|trigger)$/, '')));
-  const hasTestFailure = dx.some((d) => d.rule === 'TEST_FAILURE');
+  const hasTestFailure = dx.some((d) => d.rule === 'TEST_FAILURE' || d.rule === 'GENERATED_TEST_FAILURE');
   for (const d of dx) {
     if (d.rule !== 'LOW_COVERAGE') continue;
     if (d.details.className && !inChange.has(d.details.className)) {
@@ -95,8 +95,28 @@ function markInheritedDebt(dx, ctx) {
   return dx;
 }
 
+// A failing test that FixForward itself generated is FixForward's own mistake, so it may repair it.
+function markGeneratedTests(dx, ctx) {
+  const out = [];
+  const merged = new Map();
+  for (const d of dx) {
+    const cls = d.rule === 'TEST_FAILURE' && d.details.testClass;
+    const file = cls && findFiles(ctx.root, (p) => p.endsWith(`/classes/${cls}.cls`))[0];
+    if (file && fs.readFileSync(file, 'utf8').startsWith(GENERATED_MARK)) {
+      const line = `${d.details.test}: ${d.details.detail}`;
+      if (merged.has(cls)) { merged.get(cls).details.failures += '\n' + line; continue; }
+      const g = { ...d, rule: 'GENERATED_TEST_FAILURE', fixable: true,
+        title: 'A test FixForward generated has a wrong assertion', component: `Apex:${cls}`,
+        details: { testClass: cls, testFile: file, failures: line },
+        explanation: `${cls} was written by FixForward and does not match the code's real behaviour; FixForward will rewrite it from the failures.` };
+      merged.set(cls, g); out.push(g);
+    } else out.push(d);
+  }
+  return out;
+}
+
 async function analyse(input, ctx, log) {
-  const dx = markInheritedDebt(diagnose(extractFailures(input)), ctx);
+  const dx = markInheritedDebt(markGeneratedTests(diagnose(extractFailures(input)), ctx), ctx);
   if (!ctx.noAi && aiAvailable()) {
     for (const d of dx.filter((x) => x.rule === 'UNKNOWN' || x.rule === 'TEST_FAILURE')) {
       try { d.aiExplanation = await explainError(ctx.root, d.failure); }

@@ -57,14 +57,23 @@ export function explainError(root, failure) {
     ));
 }
 
-export function generateTestClass(root, className, source, testName) {
-  return cached(root, 'test', testName + source, async () => {
-    const out = await chat(
-      'You write Salesforce Apex unit tests. Return ONLY the Apex code of one test class, no explanation, no markdown fences. ' +
-      'Use @isTest, Test.startTest()/Test.stopTest(), System.assert* statements, and create any records the code needs. ' +
-      'Cover every branch so line coverage is well above 75%. Do not use SeeAllData.',
-      `Write a test class named ${testName} for this Apex class:\n\n${source.slice(0, 12000)}`,
-    );
+const TEST_RULES =
+  'You write Salesforce Apex unit tests. Return ONLY the Apex code of one test class, no explanation, no markdown fences. ' +
+  'Use @isTest, Test.startTest()/Test.stopTest() and System.assertEquals. Create any records the code needs. Never use SeeAllData. ' +
+  'Cover every branch so line coverage is well above 75%. ' +
+  'CRITICAL: the class code is the source of truth. Compute every expected value by tracing the code line by line for your exact inputs; ' +
+  'never assert behaviour you assume the code should have. Apex == on Strings is case-insensitive. ' +
+  'Compare Decimals using the same scale the code returns (for setScale(2) use values like 50.00).';
+
+export function generateTestClass(root, className, source, testName, feedback = null) {
+  const key = testName + source + (feedback ? feedback.failures + feedback.previous : '');
+  return cached(root, 'test', key, async () => {
+    const ask = feedback
+      ? `This test class for ${className} fails. Rewrite the whole test class ${testName} so every assertion matches what the code ` +
+        `actually does. Do not change ${className}.\n\nFailures:\n${feedback.failures.slice(0, 4000)}\n\n` +
+        `Current test:\n${feedback.previous.slice(0, 8000)}\n\n${className}:\n${source.slice(0, 12000)}`
+      : `Write a test class named ${testName} for this Apex class:\n\n${source.slice(0, 12000)}`;
+    const out = await chat(TEST_RULES, ask);
     if (!out) return null;
     const code = out.replace(/^```[a-z]*\s*/i, '').replace(/```\s*$/, '').trim();
     return /@istest/i.test(code) ? code : null;

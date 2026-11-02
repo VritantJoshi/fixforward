@@ -2,6 +2,14 @@
 const toArray = (v) => (v == null ? [] : Array.isArray(v) ? v : [v]);
 const str = (v) => (typeof v === 'string' ? v : null);
 
+// "Failed to validate the deployment (...). Due To: A.b - System.X: msg,C.d - System.Y: msg" → one failure each.
+export function splitDueTo(message) {
+  const i = message.indexOf('Due To:');
+  if (i < 0) return [{ kind: 'general', message }];
+  return message.slice(i + 7).split(/,(?=\s*\w+\.\w+\s+-\s+)|\n/).map((m) => m.trim()).filter(Boolean)
+    .map((m) => ({ kind: 'log', message: m }));
+}
+
 export function extractFailures(input) {
   let obj = input;
   if (typeof input === 'string') {
@@ -35,12 +43,8 @@ export function extractFailures(input) {
     for (const w of toArray(rtr?.codeCoverageWarnings)) {
       failures.push({ kind: 'coverage', name: str(w.name), message: str(w.message) || '' });
     }
-    if (!failures.length && str(res?.errorMessage)) {
-      failures.push({ kind: 'general', message: res.errorMessage });
-    }
-    if (!failures.length && obj.status && obj.status !== 0 && str(obj.message)) {
-      failures.push({ kind: 'general', message: obj.message });
-    }
+    const general = !failures.length && (str(res?.errorMessage) || (obj.status && obj.status !== 0 && str(obj.message)));
+    if (general) failures.push(...splitDueTo(general));
   }
 
   // Fallback for log text (e.g. Agentia job step logs): keep error-looking lines.

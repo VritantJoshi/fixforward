@@ -74,11 +74,11 @@ export const RULES = [
     title: 'Apex test failed',
     fixable: false,
     match(f) {
-      if (f.kind === 'test') return { test: f.name };
-      const m = f.message.match(/^\s*(\w+\.\w+)\s+-\s+(System\.\w+Exception.*)$/);
-      return m ? { test: m[1] } : null;
+      if (f.kind === 'test') return { test: f.name, testClass: f.name.split('.')[0], detail: f.message };
+      const m = f.message.match(/^\s*(\w+)\.(\w+)\s+-\s+([\w.]*Exception[\s\S]*)$/);
+      return m ? { test: `${m[1]}.${m[2]}`, testClass: m[1], detail: m[3] } : null;
     },
-    explain: (d, f) => `Test ${d.test} failed: ${f.message}`,
+    explain: (d) => `Test ${d.test} failed: ${d.detail}`,
     component: (d) => `Test:${d.test}`,
   },
 ];

@@ -57,3 +57,10 @@ test('plain-text sf output: per-trigger coverage, org average and failing test a
   assert.equal(cov[2].details.percent, 10);
   assert.ok(dx.some((d) => d.rule === 'TEST_FAILURE' && d.details.test === 'AccountTriggerHandlerTest.checkClone'));
 });
+
+test('combined "Due To:" message is split into separate test failures', () => {
+  const msg = 'Failed to validate the deployment (0Afg700000Hx7GbCAJ). Due To: DiscountCalculatorTest.testNegativeAmount - System.AssertException: Assertion Failed: Expected: 0, Actual: -100.00,DiscountCalculatorTest.testTierCase - System.AssertException: Assertion Failed: Expected: 0.00, Actual: 50.00';
+  const dx = diagnose(extractFailures({ status: 1, name: 'FailedValidationError', message: msg }));
+  assert.deepEqual(dx.map((d) => d.rule), ['TEST_FAILURE', 'TEST_FAILURE']);
+  assert.deepEqual(dx.map((d) => d.details.testClass), ['DiscountCalculatorTest', 'DiscountCalculatorTest']);
+});

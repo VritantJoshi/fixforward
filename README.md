@@ -40,7 +40,8 @@ When a validation or promotion fails, developers read hundreds of log lines, fin
 | MISSING_TYPE | `Invalid type: X` | Adds the class or object to the manifest |
 | LOW_COVERAGE | Coverage below 75% | Generates a test class with the LLM |
 | API_VERSION | API version errors | Sets apiVersion to the project's sourceApiVersion |
-| TEST_FAILURE | Failing Apex tests | Explains; needs a human |
+| GENERATED_TEST_FAILURE | A test FixForward itself generated fails | Rewrites the test using the failing assertions as feedback |
+| TEST_FAILURE | Failing Apex tests written by people | Explains; needs a human |
 | UNKNOWN | Anything else | LLM explanation; needs a human |
 
 ## Install
