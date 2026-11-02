@@ -57,7 +57,7 @@ Optional LLM (Groq free tier; any OpenAI-compatible API works via `FIXFORWARD_LL
 
 ```
 set GROQ_API_KEY=your_key            (Command Prompt, current window)
-set GROQ_MODEL=llama-3.3-70b-versatile   (optional; pick any model listed in your Groq console)
+set GROQ_MODEL=openai/gpt-oss-120b   (optional; pick any model listed in your Groq console)
 ```
 
 ## Commands
@@ -85,7 +85,7 @@ fixforward run --org ffuat
 fixforward insights
 ```
 
-To reset: `git checkout -- manifest/package.xml` and delete `force-app/main/default/classes/DiscountCalculatorTest.cls*`.
+To reset: copy `demo\manifest` over your project's `manifest` folder again and delete `force-app/main/default/classes/DiscountCalculatorTest.cls*`.
 
 ## Use from an AI agent
 
