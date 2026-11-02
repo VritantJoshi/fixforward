@@ -64,3 +64,10 @@ test('combined "Due To:" message is split into separate test failures', () => {
   assert.deepEqual(dx.map((d) => d.rule), ['TEST_FAILURE', 'TEST_FAILURE']);
   assert.deepEqual(dx.map((d) => d.details.testClass), ['DiscountCalculatorTest', 'DiscountCalculatorTest']);
 });
+
+test('summary lines like "3 component error(s)" are not reported as errors', () => {
+  const dx = diagnose(extractFailures({ status: 1, message: '3 component error(s)', result: { success: false, details: { componentFailures: [
+    { componentType: 'ApexClass', fullName: 'AccountScorer', problem: 'Variable does not exist: Priority_Score__c' },
+    { componentType: '', fullName: '', problem: '3 component error(s)' } ] } } }));
+  assert.deepEqual(dx.map((d) => d.rule), ['MISSING_FIELD']);
+});

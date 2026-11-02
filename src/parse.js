@@ -62,5 +62,8 @@ export function extractFailures(input) {
       if (failures.length >= 20) break;
     }
   }
-  return failures;
+  // Salesforce adds summary lines such as "3 component error(s)": counts, not errors of their own.
+  const summaryOnly = /^\s*(\d+ component errors?(\(s\))?|failed to validate the deployment[^:]*\.?)\s*$/i;
+  const real = failures.filter((f) => f.message && !summaryOnly.test(f.message));
+  return real.length ? real : failures;
 }
