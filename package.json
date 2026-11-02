@@ -1,0 +1,10 @@
+{
+  "name": "fixforward",
+  "version": "0.1.0",
+  "description": "Diagnoses failed Salesforce deployments, fixes them in source and re-validates through the Copado Agentia workflow.",
+  "type": "module",
+  "bin": { "fixforward": "bin/fixforward.js" },
+  "engines": { "node": ">=18" },
+  "scripts": { "test": "node --test" },
+  "license": "MIT"
+}

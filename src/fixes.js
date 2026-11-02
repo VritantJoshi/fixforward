@@ -1,0 +1,131 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { addToManifest, readMembers } from './manifest.js';
+import { runCmd } from './exec.js';
+import { aiAvailable, generateTestClass } from './llm.js';
+
+const norm = (p) => p.replace(/\\/g, '/');
+const SKIP = new Set(['node_modules', '.git', '.sf', '.sfdx', '.fixforward']);
+
+export function findFiles(dir, predicate, acc = []) {
+  if (!fs.existsSync(dir)) return acc;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (SKIP.has(entry.name)) continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) findFiles(full, predicate, acc);
+    else if (predicate(norm(full))) acc.push(full);
+  }
+  return acc;
+}
+
+export function projectApiVersion(root) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(root, 'sfdx-project.json'), 'utf8')).sourceApiVersion || '61.0';
+  } catch { return '61.0'; }
+}
+
+// Returns { changed, msg }. A component that is already listed is NOT a fix:
+// reporting it as one would make the run loop forever on the same error.
+function addMember(ctx, type, member) {
+  if (!ctx.manifest) return { changed: false, msg: `${type}:${member} is in source but the target still rejects it; check the user story contents` };
+  return addToManifest(ctx.manifest, type, member)
+    ? { changed: true, msg: `added ${type}:${member} to ${path.basename(ctx.manifest)}` }
+    : { changed: false, msg: `${type}:${member} is already in ${path.basename(ctx.manifest)}, so the cause is elsewhere` };
+}
+
+function findField(root, object, field) {
+  return findFiles(root, (p) =>
+    p.endsWith(`/fields/${field}.field-meta.xml`) && (!object || p.includes(`/objects/${object}/`)));
+}
+
+async function fixMissingField(d, ctx) {
+  const { field } = d.details;
+  let { object } = d.details;
+  let files = findField(ctx.root, object, field);
+  if (!files.length && ctx.sourceOrg && object) {
+    runCmd(`sf project retrieve start --metadata CustomField:${object}.${field} --target-org ${ctx.sourceOrg} --json`, ctx.root);
+    files = findField(ctx.root, object, field);
+  }
+  if (!files.length) {
+    return { applied: false, summary: `${field} is not in the repo. Retrieve it from the source org (use --source-org <alias>) or commit it to the user story.` };
+  }
+  object = object || norm(files[0]).match(/\/objects\/(\w+)\//)?.[1];
+  const r = addMember(ctx, 'CustomField', `${object}.${field}`);
+  return { applied: r.changed, summary: r.msg, files };
+}
+
+async function fixMissingType(d, ctx) {
+  const { metaType, name } = d.details;
+  const files = metaType === 'ApexClass'
+    ? findFiles(ctx.root, (p) => p.endsWith(`/classes/${name}.cls`))
+    : findFiles(ctx.root, (p) => p.endsWith(`/objects/${name}/${name}.object-meta.xml`));
+  if (!files.length) return { applied: false, summary: `${metaType} ${name} is not in the repo; commit it to the user story first.` };
+  const r = addMember(ctx, metaType, name);
+  return { applied: r.changed, summary: r.msg, files };
+}
+
+function isTestSource(src) { return /@istest/i.test(src); }
+
+function untestedClasses(ctx) {
+  const classFiles = findFiles(ctx.root, (p) => p.endsWith('.cls'));
+  const byName = new Map(classFiles.map((f) => [path.basename(f, '.cls'), f]));
+  const tests = classFiles.map((f) => fs.readFileSync(f, 'utf8')).filter(isTestSource);
+  const candidates = ctx.manifest ? readMembers(ctx.manifest, 'ApexClass') : [...byName.keys()];
+  return candidates.filter((name) => {
+    const file = byName.get(name);
+    if (!file || isTestSource(fs.readFileSync(file, 'utf8'))) return false;
+    const ref = new RegExp(`\\b${name}\\b`);
+    return !tests.some((t) => ref.test(t));
+  });
+}
+
+async function fixLowCoverage(d, ctx) {
+  if (!aiAvailable() || ctx.noAi) {
+    return { applied: false, summary: 'Test generation needs an LLM: set GROQ_API_KEY (and do not pass --no-ai).' };
+  }
+  const targets = d.details.className ? [d.details.className] : untestedClasses(ctx);
+  if (!targets.length) return { applied: false, summary: 'No untested classes found in this deployment.' };
+  const api = projectApiVersion(ctx.root);
+  const notes = [];
+  const files = [];
+  for (const name of targets) {
+    const classFile = findFiles(ctx.root, (p) => p.endsWith(`/classes/${name}.cls`))[0];
+    if (!classFile) { notes.push(`${name}: source not found`); continue; }
+    let testName = `${name}Test`;
+    if (fs.existsSync(path.join(path.dirname(classFile), `${testName}.cls`))) testName = `${name}FixForwardTest`;
+    const code = await generateTestClass(ctx.root, name, fs.readFileSync(classFile, 'utf8'), testName);
+    if (!code) { notes.push(`${name}: could not generate a test`); continue; }
+    const testFile = path.join(path.dirname(classFile), `${testName}.cls`);
+    fs.writeFileSync(testFile, code + '\n');
+    fs.writeFileSync(`${testFile}-meta.xml`,
+      `<?xml version="1.0" encoding="UTF-8"?>\n<ApexClass xmlns="http://soap.sforce.com/2006/04/metadata">\n` +
+      `    <apiVersion>${api}</apiVersion>\n    <status>Active</status>\n</ApexClass>\n`);
+    files.push(testFile);
+    notes.push(`generated ${testName} (review it before committing); ${addMember(ctx, 'ApexClass', testName).msg}`);
+  }
+  return { applied: files.length > 0, summary: notes.join('; '), files };
+}
+
+async function fixApiVersion(d, ctx) {
+  const target = norm(d.details.file);
+  const meta = findFiles(ctx.root, (p) => p.endsWith(target.endsWith('-meta.xml') ? target : `${target}-meta.xml`))[0];
+  if (!meta) return { applied: false, summary: `Could not find the metadata file for ${d.details.file}.` };
+  const api = projectApiVersion(ctx.root);
+  const xml = fs.readFileSync(meta, 'utf8');
+  if (!/<apiVersion>/.test(xml)) return { applied: false, summary: `${path.basename(meta)} has no apiVersion element.` };
+  fs.writeFileSync(meta, xml.replace(/<apiVersion>[^<]*<\/apiVersion>/, `<apiVersion>${api}</apiVersion>`));
+  return { applied: true, summary: `set apiVersion to ${api} in ${path.basename(meta)}`, files: [meta] };
+}
+
+const FIXERS = {
+  MISSING_FIELD: fixMissingField,
+  MISSING_TYPE: fixMissingType,
+  LOW_COVERAGE: fixLowCoverage,
+  API_VERSION: fixApiVersion,
+};
+
+export async function applyFix(d, ctx) {
+  const fixer = FIXERS[d.rule];
+  if (!fixer) return { applied: false, summary: 'No automatic fix for this error type.' };
+  try { return await fixer(d, ctx); } catch (e) { return { applied: false, summary: `Fix failed: ${e.message}` }; }
+}
